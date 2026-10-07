@@ -73,12 +73,18 @@ class Task:
         "daily" and +7 days for "weekly". A task finished late therefore comes
         back already overdue, so missed days are not silently skipped.
 
+        Completing a task that is already completed does nothing, so calling
+        this twice never creates a duplicate next occurrence.
+
         This method does not add the new task to a pet; use
         Scheduler.mark_task_complete() for that.
 
         Returns:
-            The next Task for "daily" or "weekly" tasks, or None for "once".
+            The next Task for "daily" or "weekly" tasks, or None for "once"
+            tasks and for tasks that were already completed.
         """
+        if self.completed:
+            return None
         self.completed = True
         interval = FREQUENCY_DAYS[self.frequency]
         if interval is None:
@@ -103,8 +109,14 @@ class Pet:
         self.tasks.append(task)
 
     def remove_task(self, description: str) -> None:
-        """Remove the task with the given description."""
-        self.tasks = [t for t in self.tasks if t.description != description]
+        """Remove pending tasks with the given description.
+
+        Completed tasks are kept as history, so removing a recurring task
+        deletes its upcoming occurrences without erasing what was already done.
+        """
+        self.tasks = [
+            t for t in self.tasks if t.completed or t.description != description
+        ]
 
     def pending_tasks(self) -> list[Task]:
         """Return the tasks that are not completed yet."""
@@ -175,8 +187,9 @@ class Scheduler:
             task: A task belonging to one of this owner's pets.
 
         Returns:
-            The newly added next occurrence, or None for one-time tasks (or if
-            the task's pet can't be found).
+            The newly added next occurrence, or None for one-time tasks,
+            tasks that were already completed, or if the task's pet can't be
+            found.
         """
         next_task = task.mark_complete()
         pet = self.owner.get_pet(task.pet_name)
