@@ -5,6 +5,8 @@ classDiagram
         +list~str~ preferences
         +list~Pet~ pets
         +add_pet(pet: Pet) None
+        +get_pet(name: str) Pet
+        +get_all_tasks() list~Task~
     }
 
     class Pet {
@@ -13,24 +15,31 @@ classDiagram
         +int age
         +list~Task~ tasks
         +add_task(task: Task) None
-        +remove_task(name: str) None
+        +remove_task(description: str) None
+        +pending_tasks() list~Task~
     }
 
     class Task {
-        +str name
+        +str description
         +int duration_minutes
         +str priority
-        +str category
+        +str time
+        +str frequency
         +bool completed
+        +str pet_name
         +priority_value() int
+        +mark_complete() None
     }
 
     class Scheduler {
         +Owner owner
         +list~Task~ scheduled
         +list~Task~ skipped
-        +generate_plan() list~Task~
+        +get_pending_tasks() list~Task~
         +sort_tasks(tasks: list~Task~) list~Task~
+        +sort_by_time(tasks: list~Task~) list~Task~
+        +generate_plan() list~Task~
+        +total_scheduled_minutes() int
         +explain_plan() str
     }
 
