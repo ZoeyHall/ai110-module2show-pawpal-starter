@@ -1,6 +1,6 @@
 import streamlit as st
 
-from pawpal_system import Owner, Pet, Task, Scheduler
+from pawpal_system import Owner, Pet, Task, Scheduler, format_minutes, time_to_minutes
 
 st.set_page_config(page_title="PawPal+", page_icon="🐾", layout="centered")
 
@@ -44,6 +44,25 @@ st.divider()
 if "owner" not in st.session_state:
     st.session_state.owner = Owner(name="Jordan", available_minutes=60)
 owner = st.session_state.owner
+scheduler = Scheduler(owner)
+
+
+def task_rows(tasks: list[Task]) -> list[dict]:
+    """Turn tasks into table rows for display."""
+    return [
+        {
+            "due": f"{t.due_date:%m/%d}",
+            "time": t.time or "anytime",
+            "task": t.description,
+            "pet": t.pet_name,
+            "minutes": t.duration_minutes,
+            "priority": t.priority,
+            "frequency": t.frequency,
+            "status": "done" if t.completed else "to do",
+        }
+        for t in tasks
+    ]
+
 
 st.subheader("Owner")
 owner.name = st.text_input("Owner name", value=owner.name)
@@ -97,51 +116,88 @@ else:
 
     if st.button("Add task"):
         time_text = task_time.strip()
-        valid_time = (
-            time_text == ""
-            or (len(time_text) == 5 and time_text[2] == ":"
-                and time_text[:2].isdigit() and time_text[3:].isdigit()
-                and int(time_text[:2]) < 24 and int(time_text[3:]) < 60)
-        )
+        start = time_to_minutes(time_text)
         if not task_title.strip():
             st.error("Please enter a task description.")
-        elif not valid_time:
-            st.error("Time must look like 08:30, or be left blank.")
+        elif time_text and start is None:
+            st.error("Time must look like 08:30 (24-hour clock), or be left blank.")
         else:
-            owner.get_pet(task_pet).add_task(
-                Task(
-                    description=task_title.strip(),
-                    duration_minutes=int(duration),
-                    priority=priority,
-                    time=time_text,
-                    frequency=frequency,
-                )
+            new_task = Task(
+                description=task_title.strip(),
+                duration_minutes=int(duration),
+                priority=priority,
+                # Store times zero-padded ("7:30" -> "07:30") so they display evenly.
+                time=format_minutes(start) if start is not None else "",
+                frequency=frequency,
             )
-            st.success(f"Added '{task_title.strip()}' for {task_pet}.")
+            owner.get_pet(task_pet).add_task(new_task)
+            st.success(f"Added '{new_task.description}' for {task_pet}.")
 
-all_tasks = owner.get_all_tasks()
-if all_tasks:
-    st.write("Current tasks:")
-    st.table(
-        [
-            {
-                "pet": t.pet_name,
-                "task": t.description,
-                "time": t.time or "any",
-                "minutes": t.duration_minutes,
-                "priority": t.priority,
-                "frequency": t.frequency,
-            }
-            for t in all_tasks
-        ]
+            # Warn right away if the new task clashes with something due today.
+            clashes = [
+                w
+                for w in scheduler.detect_conflicts(scheduler.get_pending_tasks())
+                if f"'{new_task.description}'" in w
+            ]
+            for warning in clashes:
+                st.warning(warning)
+
+if owner.get_all_tasks():
+    st.subheader("Your Tasks")
+    col1, col2 = st.columns(2)
+    with col1:
+        pet_filter = st.selectbox("Show pet", ["All pets"] + [p.name for p in owner.pets])
+    with col2:
+        status_filter = st.selectbox("Show status", ["To do", "Done", "All"])
+
+    shown = scheduler.filter_tasks(
+        pet_name=None if pet_filter == "All pets" else pet_filter,
+        completed={"To do": False, "Done": True, "All": None}[status_filter],
     )
+    shown = scheduler.sort_by_time(shown)
+
+    if shown:
+        st.caption("Sorted by time; tasks without a time are listed last.")
+        st.table(task_rows(shown))
+    else:
+        st.info("No tasks match these filters.")
+
+    pending = scheduler.sort_by_time(scheduler.filter_tasks(completed=False))
+    if pending:
+        col1, col2 = st.columns([3, 1])
+        with col1:
+            to_complete = st.selectbox(
+                "Mark a task complete",
+                range(len(pending)),
+                format_func=lambda i: (
+                    f"{pending[i].description} for {pending[i].pet_name} "
+                    f"(due {pending[i].due_date:%m/%d}"
+                    f"{', ' + pending[i].time if pending[i].time else ''})"
+                ),
+            )
+        with col2:
+            st.write("")  # aligns the button with the select box
+            if st.button("Complete"):
+                task = pending[to_complete]
+                next_task = scheduler.mark_task_complete(task)
+                message = f"Completed '{task.description}'."
+                if next_task:
+                    message += (
+                        f" Next {task.frequency} occurrence added for "
+                        f"{next_task.due_date:%A, %m/%d}."
+                    )
+                # Keep the message across the rerun that refreshes the tables.
+                st.session_state.flash = message
+                st.rerun()
+
+    if "flash" in st.session_state:
+        st.success(st.session_state.pop("flash"))
 
 st.divider()
 
 st.subheader("Build Schedule")
 
 if st.button("Generate schedule"):
-    scheduler = Scheduler(owner)
     plan = scheduler.generate_plan()
 
     if not plan and not scheduler.skipped:
@@ -164,6 +220,13 @@ if st.button("Generate schedule"):
         st.caption(
             f"{scheduler.total_scheduled_minutes()} of {owner.available_minutes} minutes used."
         )
+        if scheduler.conflicts:
+            st.error(f"⚠️ {len(scheduler.conflicts)} time conflict(s) in this plan:")
+            for warning in scheduler.conflicts:
+                st.warning(warning.removeprefix("Warning: "))
+        else:
+            st.success("No time conflicts in this plan.")
+
         if scheduler.skipped:
             st.warning(
                 "Skipped (not enough time): "
